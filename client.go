@@ -200,6 +200,6 @@ func (c *Client) traceRequest(req *http.Request, url string) error {
 				st.ServerName)
 		},
 	}
-	req = req.WithContext(httptrace.WithClientTrace(req.Context(), trace))
+	*req = *req.WithContext(httptrace.WithClientTrace(req.Context(), trace))
 	return nil
 }
