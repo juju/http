@@ -8,6 +8,7 @@ import (
 	"context"
 	"encoding/pem"
 	"net/http"
+	"net/http/cookiejar"
 	"net/http/httptest"
 
 	"github.com/juju/testing"
@@ -93,6 +94,23 @@ func (s *httpSuite) TestSecureClientAllowAccess(c *gc.C) {
 	client := NewClient(Config{})
 	_, err := client.Get(context.TODO(), s.server.URL)
 	c.Assert(err, jc.ErrorIsNil)
+}
+
+// NewClient with a default config used to overwrite http.DefaultClient.Jar
+// field; add a regression test for that.
+func (s *httpSuite) TestDefaultClientJarNotOverwritten(c *gc.C) {
+	oldJar := http.DefaultClient.Jar
+
+	jar, err := cookiejar.New(nil)
+	c.Assert(err, jc.ErrorIsNil)
+	client := NewClient(Config{Jar: jar})
+
+	hc := client.HTTPClient.(*http.Client)
+	c.Assert(hc.Jar, gc.Equals, jar)
+	c.Assert(http.DefaultClient.Jar, gc.Not(gc.Equals), jar)
+	c.Assert(http.DefaultClient.Jar, gc.Equals, oldJar)
+
+	http.DefaultClient.Jar = oldJar
 }
 
 type httpTLSServerSuite struct {
