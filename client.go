@@ -83,7 +83,7 @@ type Config struct {
 // by the given config.
 func NewClient(cfg Config) *Client {
 	certCnt := len(cfg.CACertificates)
-	var hc = http.DefaultClient
+	var hc *http.Client
 	switch {
 	case certCnt > 0:
 		hc = clientWithCerts(cfg)
@@ -98,6 +98,8 @@ func NewClient(cfg Config) *Client {
 		// and some replace the RoundTripper to answer test scenarios.
 		//
 		// https://bugs.launchpad.net/juju/+bug/1888888
+		defaultCopy := *http.DefaultClient
+		hc = &defaultCopy
 	}
 	hc.Jar = cfg.Jar
 	c := &Client{
