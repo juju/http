@@ -4,67 +4,11 @@
 package http
 
 import (
-	"context"
 	"encoding/base64"
 	"fmt"
-	"net"
 	"net/http"
-	"net/url"
 	"strings"
-	"time"
-
-	"golang.org/x/net/http/httpproxy"
 )
-
-// registerFileProtocol registers support for file:// URLs on the given transport.
-func registerFileProtocol(transport *http.Transport) {
-	transport.RegisterProtocol("file", http.NewFileTransport(http.Dir("/")))
-}
-
-var ctxtDialer = &net.Dialer{
-	Timeout:   30 * time.Second,
-	KeepAlive: 30 * time.Second,
-}
-
-// OutgoingAccessAllowed determines whether connections other than
-// localhost can be dialled.  Used for testing via the juju conn suite
-// and the base suite.
-//
-var OutgoingAccessAllowed = true
-
-func isLocalAddr(addr string) bool {
-	host, _, err := net.SplitHostPort(addr)
-	if err != nil {
-		return false
-	}
-	return host == "localhost" || net.ParseIP(host).IsLoopback()
-}
-
-// installHTTPDialShim patches the default HTTP transport so
-// that it fails when an attempt is made to dial a non-local
-// host.
-func installHTTPDialShim(t *http.Transport) {
-	t.DialContext = func(ctxt context.Context, network, addr string) (net.Conn, error) {
-		if !OutgoingAccessAllowed && !isLocalAddr(addr) {
-			return nil, fmt.Errorf("access to address %q not allowed", addr)
-		}
-		return ctxtDialer.DialContext(ctxt, network, addr)
-	}
-}
-
-// installProxyShim set a new proxy func so that we do not
-// cache proxy settings.
-func installProxyShim(t *http.Transport) {
-	t.Proxy = getProxy
-}
-
-func getProxy(req *http.Request) (*url.URL, error) {
-	// Get proxy config new for each client.  Go will cache the proxy
-	// settings for a process, this is a problem for long running programs.
-	// And caused changes in proxy settings via model-config not to
-	// be used.
-	return httpproxy.FromEnvironment().ProxyFunc()(req.URL)
-}
 
 // BasicAuthHeader creates a header that contains just the "Authorization"
 // entry.  The implementation was originally taked from net/http but this is

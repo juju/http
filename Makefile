@@ -3,7 +3,7 @@ PROJECT := github.com/juju/http
 .PHONY: check-go check
 
 check:  check-go
-	go test -gocheck.v $(PROJECT)/...
+	go test --race -gocheck.v $(PROJECT)/...
 
 check-go:
 	$(eval GOFMT := $(strip $(shell gofmt -l .| sed -e "s/^/ /g")))
