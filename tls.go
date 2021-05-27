@@ -9,21 +9,45 @@ import (
 	"time"
 )
 
-// NewHttpTLSTransport returns a new http.Transport constructed with the TLS config
+// TransportMiddleware represents a way to add an adapter to the existing transport.
+type TransportMiddleware func(*http.Transport) *http.Transport
+
+// TransportConfig holds the configurable values for setting up a http
+// transport.
+type TransportConfig struct {
+	TLSConfig           *tls.Config
+	DisableKeepAlives   bool
+	TLSHandshakeTimeout time.Duration
+	Middlewares         []TransportMiddleware
+}
+
+// NewHTTPTLSTransport returns a new http.Transport constructed with the TLS config
 // and the necessary parameters for Juju.
-func NewHttpTLSTransport(tlsConfig *tls.Config) *http.Transport {
+func NewHTTPTLSTransport(config TransportConfig) *http.Transport {
 	// See https://code.google.com/p/go/issues/detail?id=4677
 	// We need to force the connection to close each time so that we don't
 	// hit the above Go bug.
 	transport := &http.Transport{
-		TLSClientConfig:     tlsConfig,
-		DisableKeepAlives:   true,
-		TLSHandshakeTimeout: 10 * time.Second,
+		TLSClientConfig:     config.TLSConfig,
+		DisableKeepAlives:   config.DisableKeepAlives,
+		TLSHandshakeTimeout: config.TLSHandshakeTimeout,
 	}
-	installHTTPDialShim(transport)
-	registerFileProtocol(transport)
-	installProxyShim(transport)
+	for _, middlewareFn := range config.Middlewares {
+		transport = middlewareFn(transport)
+	}
 	return transport
+}
+
+// DefaultHTTPTransport creates a default transport with HTTP keep alives
+// disabled and proxy middleware enable.
+func DefaultHTTPTransport() *http.Transport {
+	return NewHTTPTLSTransport(TransportConfig{
+		DisableKeepAlives:   true,
+		TLSHandshakeTimeout: 20 * time.Second,
+		Middlewares: []TransportMiddleware{
+			ProxyMiddleware,
+		},
+	})
 }
 
 // knownGoodCipherSuites contains the list of secure cipher suites to use
