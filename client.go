@@ -27,8 +27,8 @@ import (
 // touch!
 func init() {
 	defaultTransport := http.DefaultTransport.(*http.Transport)
-	// Call the HTTPDialShim for the DefaultTransport to
-	// facilitate testing use of OutgoingAccessAllowed.
+	// Call the DialContextMiddleware for the DefaultTransport to
+	// facilitate testing use of allowOutgoingAccess.
 	defaultTransport = DialContextMiddleware(NewLocalDialBreaker(true))(defaultTransport)
 	// Call our own proxy function with the DefaultTransport.
 	http.DefaultTransport = ProxyMiddleware(defaultTransport)
@@ -125,6 +125,9 @@ func WithHTTPClient(value *http.Client) Option {
 }
 
 // WithLogger defines a logger to use with the client.
+//
+// It is recommended that you create a child logger to allow disabling of the
+// trace logging to prevent log flooding.
 func WithLogger(value Logger) Option {
 	return func(opt *options) {
 		opt.logger = value
@@ -144,7 +147,8 @@ func newOptions() *options {
 	defaultCopy := *http.DefaultClient
 
 	return &options{
-		disableKeepAlives:        false,
+		disableKeepAlives:        true,
+		tlsHandshakeTimeout:      20 * time.Second,
 		skipHostnameVerification: false,
 		middlewares: []TransportMiddleware{
 			DialContextMiddleware(NewLocalDialBreaker(true)),
@@ -172,7 +176,11 @@ func NewClient(options ...Option) *Client {
 	}
 
 	client := opts.httpClient
-	transport := DefaultHTTPTransportWithMiddlewares(opts.middlewares)
+	transport := NewHTTPTLSTransport(TransportConfig{
+		DisableKeepAlives:   opts.disableKeepAlives,
+		TLSHandshakeTimeout: opts.tlsHandshakeTimeout,
+		Middlewares:         opts.middlewares,
+	})
 	switch {
 	case len(opts.caCertificates) > 0:
 		transport = transportWithCerts(transport, opts.caCertificates, opts.skipHostnameVerification)

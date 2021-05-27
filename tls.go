@@ -41,18 +41,12 @@ func NewHTTPTLSTransport(config TransportConfig) *http.Transport {
 // DefaultHTTPTransport creates a default transport with HTTP keep alives
 // disabled and proxy middleware enable.
 func DefaultHTTPTransport() *http.Transport {
-	return DefaultHTTPTransportWithMiddlewares([]TransportMiddleware{
-		ProxyMiddleware,
-	})
-}
-
-// DefaultHTTPTransportWithMiddlewares creates a default transport with HTTP
-// keep alives disabled and allows a slice of middlewares to be passed through.
-func DefaultHTTPTransportWithMiddlewares(middlewares []TransportMiddleware) *http.Transport {
 	return NewHTTPTLSTransport(TransportConfig{
 		DisableKeepAlives:   true,
-		TLSHandshakeTimeout: 30 * time.Second,
-		Middlewares:         middlewares,
+		TLSHandshakeTimeout: 20 * time.Second,
+		Middlewares: []TransportMiddleware{
+			ProxyMiddleware,
+		},
 	})
 }
 
