@@ -6,6 +6,7 @@ import (
 	"context"
 	"net"
 	"net/http"
+	"net/url"
 	"time"
 
 	"github.com/juju/errors"
@@ -97,4 +98,36 @@ func ProxyMiddleware(transport *http.Transport) *http.Transport {
 func ForceAttemptHTTP2Middleware(transport *http.Transport) *http.Transport {
 	transport.ForceAttemptHTTP2 = true
 	return transport
+}
+
+// RequestRecorder is implemented by types that can record information about
+// successful and unsuccessful http requests.
+type RequestRecorder interface {
+	// Record an outgoing request which produced an http.Response.
+	Record(method string, url *url.URL, res *http.Response, rtt time.Duration)
+
+	// Record an outgoing request which returned back an error.
+	RecordError(method string, url *url.URL, err error)
+}
+
+type roundTripRecorder struct {
+	requestRecorder     RequestRecorder
+	wrappedRoundTripper http.RoundTripper
+}
+
+// RoundTrip implements http.RoundTripper. If delegates the request to the
+// wrapped RoundTripper and invokes the appropriate RequestRecorder methods
+// depending on the outcome.
+func (lr roundTripRecorder) RoundTrip(req *http.Request) (*http.Response, error) {
+	start := time.Now()
+	res, err := lr.wrappedRoundTripper.RoundTrip(req)
+	rtt := time.Since(start)
+
+	if err != nil {
+		lr.requestRecorder.RecordError(req.Method, req.URL, err)
+	} else {
+		lr.requestRecorder.Record(req.Method, req.URL, res, rtt)
+	}
+
+	return res, err
 }

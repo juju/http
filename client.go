@@ -58,6 +58,7 @@ type options struct {
 	middlewares              []TransportMiddleware
 	httpClient               *http.Client
 	logger                   Logger
+	requestRecorder          RequestRecorder
 }
 
 // WithCACertificates contains Authority certificates to be used to validate
@@ -134,6 +135,14 @@ func WithLogger(value Logger) Option {
 	}
 }
 
+// WithRequestRecorder specifies a RequestRecorder used for recording outgoing
+// http requests regardless of whether they succeeded or failed.
+func WithRequestRecorder(value RequestRecorder) Option {
+	return func(opt *options) {
+		opt.requestRecorder = value
+	}
+}
+
 // Create a options instance with default values.
 func newOptions() *options {
 	// In this case, use a default http.Client.
@@ -187,7 +196,15 @@ func NewClient(options ...Option) *Client {
 	case opts.skipHostnameVerification:
 		transport = transportWithSkipVerify(transport, opts.skipHostnameVerification)
 	}
-	client.Transport = transport
+
+	if opts.requestRecorder != nil {
+		client.Transport = roundTripRecorder{
+			requestRecorder:     opts.requestRecorder,
+			wrappedRoundTripper: transport,
+		}
+	} else {
+		client.Transport = transport
+	}
 
 	if opts.cookieJar != nil {
 		client.Jar = opts.cookieJar
