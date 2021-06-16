@@ -7,10 +7,15 @@ import (
 	"bytes"
 	"context"
 	"encoding/pem"
+	"errors"
+	"fmt"
 	"net/http"
 	"net/http/cookiejar"
 	"net/http/httptest"
+	url "net/url"
+	"time"
 
+	gomock "github.com/golang/mock/gomock"
 	"github.com/juju/testing"
 	jc "github.com/juju/testing/checkers"
 	gc "gopkg.in/check.v1"
@@ -66,6 +71,38 @@ func (s *httpSuite) TestDefaultClientJarNotOverwritten(c *gc.C) {
 	c.Assert(http.DefaultClient.Jar, gc.Equals, oldJar)
 
 	http.DefaultClient.Jar = oldJar
+}
+
+func (s *httpSuite) TestRequestRecorder(c *gc.C) {
+	ctrl := gomock.NewController(c)
+	defer ctrl.Finish()
+
+	dummyServer := httptest.NewServer(http.HandlerFunc(func(res http.ResponseWriter, req *http.Request) {
+		_, _ = fmt.Fprintln(res, "they are listening...")
+	}))
+	defer dummyServer.Close()
+
+	validTarget := fmt.Sprintf("%s/tin/foil", dummyServer.URL)
+	validTargetURL, err := url.Parse(validTarget)
+	c.Assert(err, jc.ErrorIsNil)
+
+	invalidTarget := "btc://secret/wallet"
+	invalidTargetURL, err := url.Parse(invalidTarget)
+	c.Assert(err, jc.ErrorIsNil)
+
+	recorder := NewMockRequestRecorder(ctrl)
+	recorder.EXPECT().Record("GET", validTargetURL, gomock.AssignableToTypeOf(&http.Response{}), gomock.AssignableToTypeOf(time.Duration(42)))
+	recorder.EXPECT().RecordError("PUT", invalidTargetURL, gomock.AssignableToTypeOf(errors.New("")))
+
+	client := NewClient(WithRequestRecorder(recorder))
+	res, err := client.Get(context.TODO(), validTarget)
+	c.Assert(err, jc.ErrorIsNil)
+	defer res.Body.Close()
+
+	req, err := http.NewRequestWithContext(context.TODO(), "PUT", invalidTarget, nil)
+	c.Assert(err, jc.ErrorIsNil)
+	_, err = client.Do(req)
+	c.Assert(err, gc.Not(jc.ErrorIsNil))
 }
 
 type httpTLSServerSuite struct {
