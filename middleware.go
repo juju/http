@@ -7,9 +7,12 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"strconv"
 	"time"
 
+	"github.com/juju/clock"
 	"github.com/juju/errors"
+	"github.com/juju/retry"
 )
 
 // FileProtocolMiddleware registers support for file:// URLs on the given transport.
@@ -130,4 +133,118 @@ func (lr roundTripRecorder) RoundTrip(req *http.Request) (*http.Response, error)
 	}
 
 	return res, err
+}
+
+// RetryMiddleware allows retrying of certain retryable http errors.
+// This only handles very specific status codes, ones that are deemed retryable;
+//
+//  - 502 Bad Gateway
+//  - 503 Service Unavailable
+//  - 504 Gateway Timeout
+type retryMiddleware struct {
+	policy              RetryPolicy
+	wrappedRoundTripper http.RoundTripper
+	clock               clock.Clock
+}
+
+type RetryPolicy struct {
+	Delay    time.Duration
+	Attempts int
+}
+
+// Validate validates the RetryPolicy for any issues.
+func (p RetryPolicy) Validate() error {
+	if p.Attempts < 1 {
+		return errors.Errorf("expected at least one attempt")
+	}
+	return nil
+}
+
+// RetryMiddleware creates a retry transport.
+func RetryMiddleware(transport *http.Transport, policy RetryPolicy) http.RoundTripper {
+	return retryMiddleware{
+		policy:              policy,
+		wrappedRoundTripper: transport,
+		clock:               clock.WallClock,
+	}
+}
+
+type retryableErr struct{}
+
+func (retryableErr) Error() string {
+	return "retryable error"
+}
+
+func (m retryMiddleware) RoundTrip(req *http.Request) (*http.Response, error) {
+	// To prevent the creation of the attempt strategy, we circumvent it.
+	res, retryable, err := m.roundTrip(req)
+	if err != nil {
+		return nil, err
+	}
+	// Shortcut as much as possible.
+	if !retryable || m.policy.Attempts-1 < 1 {
+		return res, nil
+	}
+
+	err = retry.Call(retry.CallArgs{
+		Clock: m.clock,
+		Func: func() error {
+			res, retryable, err = m.roundTrip(req)
+			if err != nil {
+				return err
+			}
+			if retryable {
+				return retryableErr{}
+			}
+			return nil
+		},
+		IsFatalError: func(err error) bool {
+			// Work out if it's not a retryable error.
+			_, ok := err.(retryableErr)
+			return !ok
+		},
+		Attempts: m.policy.Attempts - 1,
+		Delay:    m.policy.Delay,
+		BackoffFunc: func(delay time.Duration, attempts int) time.Duration {
+			return m.defaultBackoff(res, delay)
+		},
+	})
+
+	return res, err
+}
+
+func (m retryMiddleware) roundTrip(req *http.Request) (*http.Response, bool, error) {
+	res, err := m.wrappedRoundTripper.RoundTrip(req)
+	if err != nil {
+		return nil, false, err
+	}
+
+	switch res.StatusCode {
+	case http.StatusBadGateway, http.StatusGatewayTimeout:
+		// The request should be retryable.
+		fallthrough
+	case http.StatusServiceUnavailable, http.StatusTooManyRequests:
+		// The request should be retryable, but additionally should contain
+		// a potential Retry-After header.
+		return res, true, nil
+	default:
+		// Don't handle any of the following status codes.
+		return res, false, nil
+	}
+}
+
+// defaultBackoff attempts to workout a good backoff strategy based on the
+// backoff policy or the status code from the response. The
+func (m retryMiddleware) defaultBackoff(resp *http.Response, max time.Duration) time.Duration {
+	if resp.StatusCode == http.StatusServiceUnavailable || resp.StatusCode == http.StatusTooManyRequests {
+		if header := resp.Header.Get("Retry-After"); header != "" {
+			// Attempt to parse the header from the request.
+			retry, err := strconv.ParseInt(header, 10, 64)
+			if err == nil {
+				return time.Second * time.Duration(retry)
+			}
+		}
+	}
+
+	return max
 }
