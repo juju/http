@@ -4,7 +4,11 @@ package http
 
 import (
 	"context"
+	"net/http"
+	"time"
 
+	"github.com/golang/mock/gomock"
+	"github.com/juju/clock"
 	"github.com/juju/testing"
 	gc "gopkg.in/check.v1"
 )
@@ -100,4 +104,118 @@ func (s *LocalDialBreakerSuite) TestLocalAllowedAfterTrip(c *gc.C) {
 		// Reset the breaker.
 		breaker.Trip()
 	}
+}
+
+type RetrySuite struct {
+	testing.IsolationSuite
+}
+
+var _ = gc.Suite(&RetrySuite{})
+
+func (s *RetrySuite) TestRetryNotRequired(c *gc.C) {
+	ctrl := gomock.NewController(c)
+	defer ctrl.Finish()
+
+	req, err := http.NewRequest("GET", "http://meshuggah.rocks", nil)
+	c.Assert(err, gc.IsNil)
+
+	transport := NewMockRoundTripper(ctrl)
+	transport.EXPECT().RoundTrip(req).Return(&http.Response{
+		StatusCode: http.StatusOK,
+	}, nil)
+
+	middleware := RetryMiddleware(transport, RetryPolicy{Attempts: 3, Delay: time.Second}, clock.WallClock)
+
+	resp, err := middleware.RoundTrip(req)
+	c.Assert(err, gc.IsNil)
+	c.Assert(resp.StatusCode, gc.Equals, http.StatusOK)
+}
+
+func (s *RetrySuite) TestRetryRequired(c *gc.C) {
+	ctrl := gomock.NewController(c)
+	defer ctrl.Finish()
+
+	req, err := http.NewRequest("GET", "http://meshuggah.rocks", nil)
+	c.Assert(err, gc.IsNil)
+
+	transport := NewMockRoundTripper(ctrl)
+	transport.EXPECT().RoundTrip(req).Return(&http.Response{
+		StatusCode: http.StatusBadGateway,
+	}, nil).Times(2)
+	transport.EXPECT().RoundTrip(req).Return(&http.Response{
+		StatusCode: http.StatusOK,
+	}, nil)
+
+	ch := make(chan time.Time)
+
+	clock := NewMockClock(ctrl)
+	clock.EXPECT().Now().Return(time.Now()).AnyTimes()
+	clock.EXPECT().After(gomock.Any()).Return(ch).AnyTimes()
+
+	retries := 3
+	go func() {
+		for i := 0; i < retries; i++ {
+			ch <- time.Now()
+		}
+	}()
+
+	middleware := RetryMiddleware(transport, RetryPolicy{Attempts: retries, Delay: time.Second}, clock)
+
+	resp, err := middleware.RoundTrip(req)
+	c.Assert(err, gc.IsNil)
+	c.Assert(resp.StatusCode, gc.Equals, http.StatusOK)
+}
+
+func (s *RetrySuite) TestRetryRequiredAndExceeded(c *gc.C) {
+	ctrl := gomock.NewController(c)
+	defer ctrl.Finish()
+
+	req, err := http.NewRequest("GET", "http://meshuggah.rocks", nil)
+	c.Assert(err, gc.IsNil)
+
+	transport := NewMockRoundTripper(ctrl)
+	transport.EXPECT().RoundTrip(req).Return(&http.Response{
+		StatusCode: http.StatusBadGateway,
+	}, nil).Times(3)
+
+	ch := make(chan time.Time)
+
+	clock := NewMockClock(ctrl)
+	clock.EXPECT().Now().Return(time.Now()).AnyTimes()
+	clock.EXPECT().After(gomock.Any()).Return(ch).AnyTimes()
+
+	retries := 3
+	go func() {
+		for i := 0; i < retries; i++ {
+			ch <- time.Now()
+		}
+	}()
+
+	middleware := RetryMiddleware(transport, RetryPolicy{Attempts: retries, Delay: time.Second}, clock)
+
+	_, err = middleware.RoundTrip(req)
+	c.Assert(err, gc.ErrorMatches, `attempt count exceeded: retryable error`)
+}
+
+func (s *RetrySuite) TestRetryRequiredContextKilled(c *gc.C) {
+	ctrl := gomock.NewController(c)
+	defer ctrl.Finish()
+
+	ctx, cancel := context.WithCancel(context.Background())
+
+	req, err := http.NewRequestWithContext(ctx, "GET", "http://meshuggah.rocks", nil)
+	c.Assert(err, gc.IsNil)
+
+	transport := NewMockRoundTripper(ctrl)
+
+	clock := NewMockClock(ctrl)
+	clock.EXPECT().Now().Return(time.Now())
+
+	middleware := RetryMiddleware(transport, RetryPolicy{Attempts: 3, Delay: time.Second}, clock)
+
+	// Nothing should run, the context has been cancelled.
+	cancel()
+
+	_, err = middleware.RoundTrip(req)
+	c.Assert(err, gc.ErrorMatches, `context canceled`)
 }

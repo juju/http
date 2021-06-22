@@ -113,6 +113,10 @@ type RequestRecorder interface {
 	RecordError(method string, url *url.URL, err error)
 }
 
+// RoundTripper allows us to generate mocks for the http.RoundTripper because
+// we're already in a http package.
+type RoundTripper = http.RoundTripper
+
 type roundTripRecorder struct {
 	requestRecorder     RequestRecorder
 	wrappedRoundTripper http.RoundTripper
@@ -161,11 +165,11 @@ func (p RetryPolicy) Validate() error {
 }
 
 // RetryMiddleware creates a retry transport.
-func RetryMiddleware(transport *http.Transport, policy RetryPolicy) http.RoundTripper {
+func RetryMiddleware(transport http.RoundTripper, policy RetryPolicy, clock clock.Clock) http.RoundTripper {
 	return retryMiddleware{
 		policy:              policy,
 		wrappedRoundTripper: transport,
-		clock:               clock.WallClock,
+		clock:               clock,
 	}
 }
 
@@ -176,19 +180,16 @@ func (retryableErr) Error() string {
 }
 
 func (m retryMiddleware) RoundTrip(req *http.Request) (*http.Response, error) {
-	// To prevent the creation of the attempt strategy, we circumvent it.
-	res, retryable, err := m.roundTrip(req)
-	if err != nil {
-		return nil, err
-	}
-	// Shortcut as much as possible.
-	if !retryable || m.policy.Attempts-1 < 1 {
-		return res, nil
-	}
-
-	err = retry.Call(retry.CallArgs{
+	var res *http.Response
+	err := retry.Call(retry.CallArgs{
 		Clock: m.clock,
 		Func: func() error {
+			if err := req.Context().Err(); err != nil {
+				return err
+			}
+
+			var retryable bool
+			var err error
 			res, retryable, err = m.roundTrip(req)
 			if err != nil {
 				return err
@@ -200,10 +201,10 @@ func (m retryMiddleware) RoundTrip(req *http.Request) (*http.Response, error) {
 		},
 		IsFatalError: func(err error) bool {
 			// Work out if it's not a retryable error.
-			_, ok := err.(retryableErr)
+			_, ok := errors.Cause(err).(retryableErr)
 			return !ok
 		},
-		Attempts: m.policy.Attempts - 1,
+		Attempts: m.policy.Attempts,
 		Delay:    m.policy.Delay,
 		BackoffFunc: func(delay time.Duration, attempts int) time.Duration {
 			return m.defaultBackoff(res, delay)
