@@ -124,7 +124,7 @@ func (s *RetrySuite) TestRetryNotRequired(c *gc.C) {
 		StatusCode: http.StatusOK,
 	}, nil)
 
-	middleware := RetryMiddleware(transport, RetryPolicy{Attempts: 3, Delay: time.Second}, clock.WallClock)
+	middleware := makeRetryMiddleware(transport, RetryPolicy{Attempts: 3, Delay: time.Second}, clock.WallClock)
 
 	resp, err := middleware.RoundTrip(req)
 	c.Assert(err, gc.IsNil)
@@ -159,7 +159,7 @@ func (s *RetrySuite) TestRetryRequired(c *gc.C) {
 		}
 	}()
 
-	middleware := RetryMiddleware(transport, RetryPolicy{Attempts: retries, Delay: time.Second}, clock)
+	middleware := makeRetryMiddleware(transport, RetryPolicy{Attempts: retries, Delay: time.Second}, clock)
 
 	resp, err := middleware.RoundTrip(req)
 	c.Assert(err, gc.IsNil)
@@ -191,7 +191,7 @@ func (s *RetrySuite) TestRetryRequiredAndExceeded(c *gc.C) {
 		}
 	}()
 
-	middleware := RetryMiddleware(transport, RetryPolicy{Attempts: retries, Delay: time.Second}, clock)
+	middleware := makeRetryMiddleware(transport, RetryPolicy{Attempts: retries, Delay: time.Second}, clock)
 
 	_, err = middleware.RoundTrip(req)
 	c.Assert(err, gc.ErrorMatches, `attempt count exceeded: retryable error`)
@@ -211,7 +211,7 @@ func (s *RetrySuite) TestRetryRequiredContextKilled(c *gc.C) {
 	clock := NewMockClock(ctrl)
 	clock.EXPECT().Now().Return(time.Now())
 
-	middleware := RetryMiddleware(transport, RetryPolicy{Attempts: 3, Delay: time.Second}, clock)
+	middleware := makeRetryMiddleware(transport, RetryPolicy{Attempts: 3, Delay: time.Second}, clock)
 
 	// Nothing should run, the context has been cancelled.
 	cancel()

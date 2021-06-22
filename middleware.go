@@ -164,8 +164,8 @@ func (p RetryPolicy) Validate() error {
 	return nil
 }
 
-// RetryMiddleware creates a retry transport.
-func RetryMiddleware(transport http.RoundTripper, policy RetryPolicy, clock clock.Clock) http.RoundTripper {
+// makeRetryMiddleware creates a retry transport.
+func makeRetryMiddleware(transport http.RoundTripper, policy RetryPolicy, clock clock.Clock) http.RoundTripper {
 	return retryMiddleware{
 		policy:              policy,
 		wrappedRoundTripper: transport,
