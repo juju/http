@@ -166,6 +166,45 @@ func (s *RetrySuite) TestRetryRequired(c *gc.C) {
 	c.Assert(resp.StatusCode, gc.Equals, http.StatusOK)
 }
 
+func (s *RetrySuite) TestRetryRequiredUsingBackoff(c *gc.C) {
+	ctrl := gomock.NewController(c)
+	defer ctrl.Finish()
+
+	req, err := http.NewRequest("GET", "http://meshuggah.rocks", nil)
+	c.Assert(err, gc.IsNil)
+
+	header := make(http.Header)
+	header.Add("Retry-After", "42")
+
+	transport := NewMockRoundTripper(ctrl)
+	transport.EXPECT().RoundTrip(req).Return(&http.Response{
+		StatusCode: http.StatusTooManyRequests,
+		Header:     header,
+	}, nil).Times(2)
+	transport.EXPECT().RoundTrip(req).Return(&http.Response{
+		StatusCode: http.StatusOK,
+	}, nil)
+
+	ch := make(chan time.Time)
+
+	clock := NewMockClock(ctrl)
+	clock.EXPECT().Now().Return(time.Now()).AnyTimes()
+	clock.EXPECT().After(time.Second * 42).Return(ch).Times(2)
+
+	retries := 3
+	go func() {
+		for i := 0; i < retries; i++ {
+			ch <- time.Now()
+		}
+	}()
+
+	middleware := makeRetryMiddleware(transport, RetryPolicy{Attempts: retries, Delay: time.Second}, clock)
+
+	resp, err := middleware.RoundTrip(req)
+	c.Assert(err, gc.IsNil)
+	c.Assert(resp.StatusCode, gc.Equals, http.StatusOK)
+}
+
 func (s *RetrySuite) TestRetryRequiredAndExceeded(c *gc.C) {
 	ctrl := gomock.NewController(c)
 	defer ctrl.Finish()
