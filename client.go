@@ -12,6 +12,7 @@ import (
 	"net/http/httputil"
 	"time"
 
+	"github.com/juju/clock"
 	"github.com/juju/errors"
 	"github.com/juju/loggo"
 )
@@ -43,6 +44,7 @@ type HTTPClient interface {
 type Logger interface {
 	IsTraceEnabled() bool
 	Tracef(message string, args ...interface{})
+	Errorf(message string, args ...interface{})
 }
 
 // Option to be passed into the transport construction to customize the
@@ -59,6 +61,7 @@ type options struct {
 	httpClient               *http.Client
 	logger                   Logger
 	requestRecorder          RequestRecorder
+	retryPolicy              *RetryPolicy
 }
 
 // WithCACertificates contains Authority certificates to be used to validate
@@ -143,6 +146,13 @@ func WithRequestRecorder(value RequestRecorder) Option {
 	}
 }
 
+// WithRequestRetrier specifies a request retrying policy.
+func WithRequestRetrier(value RetryPolicy) Option {
+	return func(opt *options) {
+		opt.retryPolicy = &value
+	}
+}
+
 // Create a options instance with default values.
 func newOptions() *options {
 	// In this case, use a default http.Client.
@@ -204,6 +214,17 @@ func NewClient(options ...Option) *Client {
 		}
 	} else {
 		client.Transport = transport
+	}
+
+	// Ensure we add the retry middleware after request recorder if there is
+	// one, to ensure that we get all the logging at the right level.
+	if opts.retryPolicy != nil {
+		client.Transport = makeRetryMiddleware(
+			client.Transport,
+			*opts.retryPolicy,
+			clock.WallClock,
+			opts.logger,
+		)
 	}
 
 	if opts.cookieJar != nil {

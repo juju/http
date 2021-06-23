@@ -7,7 +7,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/pem"
-	"errors"
 	"fmt"
 	"net/http"
 	"net/http/cookiejar"
@@ -92,7 +91,7 @@ func (s *httpSuite) TestRequestRecorder(c *gc.C) {
 
 	recorder := NewMockRequestRecorder(ctrl)
 	recorder.EXPECT().Record("GET", validTargetURL, gomock.AssignableToTypeOf(&http.Response{}), gomock.AssignableToTypeOf(time.Duration(42)))
-	recorder.EXPECT().RecordError("PUT", invalidTargetURL, gomock.AssignableToTypeOf(errors.New("")))
+	recorder.EXPECT().RecordError("PUT", invalidTargetURL, gomock.Any())
 
 	client := NewClient(WithRequestRecorder(recorder))
 	res, err := client.Get(context.TODO(), validTarget)
@@ -103,6 +102,77 @@ func (s *httpSuite) TestRequestRecorder(c *gc.C) {
 	c.Assert(err, jc.ErrorIsNil)
 	_, err = client.Do(req)
 	c.Assert(err, gc.Not(jc.ErrorIsNil))
+}
+
+func (s *httpSuite) TestRetry(c *gc.C) {
+	ctrl := gomock.NewController(c)
+	defer ctrl.Finish()
+
+	attempts := 0
+	retries := 3
+	dummyServer := httptest.NewServer(http.HandlerFunc(func(res http.ResponseWriter, req *http.Request) {
+		if attempts < retries-1 {
+			res.WriteHeader(http.StatusBadGateway)
+		} else {
+			res.WriteHeader(http.StatusOK)
+		}
+		attempts++
+		_, _ = fmt.Fprintln(res, "they are listening...")
+	}))
+	defer dummyServer.Close()
+
+	validTarget := fmt.Sprintf("%s/tin/foil", dummyServer.URL)
+	validTargetURL, err := url.Parse(validTarget)
+	c.Assert(err, jc.ErrorIsNil)
+
+	recorder := NewMockRequestRecorder(ctrl)
+	recorder.EXPECT().Record("GET", validTargetURL, gomock.AssignableToTypeOf(&http.Response{}), gomock.AssignableToTypeOf(time.Duration(42))).Times(retries)
+
+	client := NewClient(
+		// We can use the request recorder to monitor how many retries have been
+		// made.
+		WithRequestRecorder(recorder),
+		WithRequestRetrier(RetryPolicy{
+			Delay:    time.Nanosecond,
+			Attempts: retries,
+			MaxDelay: time.Minute,
+		}),
+	)
+	res, err := client.Get(context.TODO(), validTarget)
+	c.Assert(err, jc.ErrorIsNil)
+	defer res.Body.Close()
+}
+
+func (s *httpSuite) TestRetryExceeded(c *gc.C) {
+	ctrl := gomock.NewController(c)
+	defer ctrl.Finish()
+
+	retries := 3
+	dummyServer := httptest.NewServer(http.HandlerFunc(func(res http.ResponseWriter, req *http.Request) {
+		res.WriteHeader(http.StatusBadGateway)
+		_, _ = fmt.Fprintln(res, "they are listening...")
+	}))
+	defer dummyServer.Close()
+
+	validTarget := fmt.Sprintf("%s/tin/foil", dummyServer.URL)
+	validTargetURL, err := url.Parse(validTarget)
+	c.Assert(err, jc.ErrorIsNil)
+
+	recorder := NewMockRequestRecorder(ctrl)
+	recorder.EXPECT().Record("GET", validTargetURL, gomock.AssignableToTypeOf(&http.Response{}), gomock.AssignableToTypeOf(time.Duration(42))).Times(retries)
+
+	client := NewClient(
+		// We can use the request recorder to monitor how many retries have been
+		// made.
+		WithRequestRecorder(recorder),
+		WithRequestRetrier(RetryPolicy{
+			Delay:    time.Nanosecond,
+			Attempts: retries,
+			MaxDelay: time.Minute,
+		}),
+	)
+	_, err = client.Get(context.TODO(), validTarget)
+	c.Assert(err, gc.ErrorMatches, `.*attempt count exceeded: retryable error`)
 }
 
 type httpTLSServerSuite struct {

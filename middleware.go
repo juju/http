@@ -7,9 +7,12 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"strconv"
 	"time"
 
+	"github.com/juju/clock"
 	"github.com/juju/errors"
+	"github.com/juju/retry"
 )
 
 // FileProtocolMiddleware registers support for file:// URLs on the given transport.
@@ -110,6 +113,10 @@ type RequestRecorder interface {
 	RecordError(method string, url *url.URL, err error)
 }
 
+// RoundTripper allows us to generate mocks for the http.RoundTripper because
+// we're already in a http package.
+type RoundTripper = http.RoundTripper
+
 type roundTripRecorder struct {
 	requestRecorder     RequestRecorder
 	wrappedRoundTripper http.RoundTripper
@@ -130,4 +137,154 @@ func (lr roundTripRecorder) RoundTrip(req *http.Request) (*http.Response, error)
 	}
 
 	return res, err
+}
+
+// RetryMiddleware allows retrying of certain retryable http errors.
+// This only handles very specific status codes, ones that are deemed retryable:
+//
+//  - 502 Bad Gateway
+//  - 503 Service Unavailable
+//  - 504 Gateway Timeout
+type retryMiddleware struct {
+	policy              RetryPolicy
+	wrappedRoundTripper http.RoundTripper
+	clock               clock.Clock
+	logger              Logger
+}
+
+type RetryPolicy struct {
+	Delay    time.Duration
+	MaxDelay time.Duration
+	Attempts int
+}
+
+// Validate validates the RetryPolicy for any issues.
+func (p RetryPolicy) Validate() error {
+	if p.Attempts < 1 {
+		return errors.Errorf("expected at least one attempt")
+	}
+	if p.MaxDelay < 1 {
+		return errors.Errorf("expected max delay to be a valid time")
+	}
+	return nil
+}
+
+// makeRetryMiddleware creates a retry transport.
+func makeRetryMiddleware(transport http.RoundTripper, policy RetryPolicy, clock clock.Clock, logger Logger) http.RoundTripper {
+	return retryMiddleware{
+		policy:              policy,
+		wrappedRoundTripper: transport,
+		clock:               clock,
+		logger:              logger,
+	}
+}
+
+type retryableErr struct{}
+
+func (retryableErr) Error() string {
+	return "retryable error"
+}
+
+// RoundTrip defines a strategy for handling retries based on the status code.
+func (m retryMiddleware) RoundTrip(req *http.Request) (*http.Response, error) {
+	var (
+		res        *http.Response
+		backOffErr error
+	)
+	err := retry.Call(retry.CallArgs{
+		Clock: m.clock,
+		Func: func() error {
+			if err := req.Context().Err(); err != nil {
+				return err
+			}
+			if backOffErr != nil {
+				return backOffErr
+			}
+
+			var retryable bool
+			var err error
+			res, retryable, err = m.roundTrip(req)
+			if err != nil {
+				return err
+			}
+			if retryable {
+				return retryableErr{}
+			}
+			return nil
+		},
+		IsFatalError: func(err error) bool {
+			// Work out if it's not a retryable error.
+			_, ok := errors.Cause(err).(retryableErr)
+			return !ok
+		},
+		Attempts: m.policy.Attempts,
+		Delay:    m.policy.Delay,
+		BackoffFunc: func(delay time.Duration, attempts int) time.Duration {
+			var duration time.Duration
+			duration, backOffErr = m.defaultBackoff(res, delay)
+			return duration
+		},
+	})
+
+	return res, err
+}
+
+func (m retryMiddleware) roundTrip(req *http.Request) (*http.Response, bool, error) {
+	res, err := m.wrappedRoundTripper.RoundTrip(req)
+	if err != nil {
+		return nil, false, err
+	}
+
+	switch res.StatusCode {
+	case http.StatusBadGateway, http.StatusGatewayTimeout:
+		// The request should be retryable.
+		fallthrough
+	case http.StatusServiceUnavailable, http.StatusTooManyRequests:
+		// The request should be retryable, but additionally should contain
+		// a potential Retry-After header.
+		return res, true, nil
+	default:
+		// Don't handle any of the following status codes.
+		return res, false, nil
+	}
+}
+
+// defaultBackoff attempts to workout a good backoff strategy based on the
+// backoff policy or the status code from the response.
+//
+// RFC7231 states that the retry-after header can look like the following:
+//
+//  - Retry-After: <http-date>
+//  - Retry-After: <delay-seconds>
+//
+func (m retryMiddleware) defaultBackoff(resp *http.Response, backoff time.Duration) (time.Duration, error) {
+	if header := resp.Header.Get("Retry-After"); header != "" {
+		// Attempt to parse the header from the request.
+		//
+		// Check for delay in seconds first, before checking for a http-date
+		seconds, err := strconv.ParseInt(header, 10, 64)
+		if err == nil {
+			return m.clampBackoff(time.Second * time.Duration(seconds))
+		}
+		// Check for http-date.
+		date, err := time.Parse(time.RFC1123, header)
+		if err == nil {
+			return m.clampBackoff(m.clock.Now().Sub(date))
+		}
+		url := ""
+		if resp.Request != nil {
+			url = resp.Request.URL.String()
+		}
+		m.logger.Errorf("unable to parse Retry-After header %s from %s", header, url)
+	}
+
+	return m.clampBackoff(backoff)
+}
+
+func (m retryMiddleware) clampBackoff(duration time.Duration) (time.Duration, error) {
+	if m.policy.MaxDelay > 0 && duration > m.policy.MaxDelay {
+		future := m.clock.Now().Add(duration)
+		return duration, errors.Errorf("API request retry is not accepting further requests until %s", future.Format(time.RFC3339))
+	}
+	return duration, nil
 }
