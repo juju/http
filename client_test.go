@@ -135,6 +135,7 @@ func (s *httpSuite) TestRetry(c *gc.C) {
 		WithRequestRetrier(RetryPolicy{
 			Delay:    time.Nanosecond,
 			Attempts: retries,
+			MaxDelay: time.Minute,
 		}),
 	)
 	res, err := client.Get(context.TODO(), validTarget)
@@ -167,6 +168,7 @@ func (s *httpSuite) TestRetryExceeded(c *gc.C) {
 		WithRequestRetrier(RetryPolicy{
 			Delay:    time.Nanosecond,
 			Attempts: retries,
+			MaxDelay: time.Minute,
 		}),
 	)
 	_, err = client.Get(context.TODO(), validTarget)

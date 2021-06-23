@@ -159,7 +159,11 @@ func (s *RetrySuite) TestRetryRequired(c *gc.C) {
 		}
 	}()
 
-	middleware := makeRetryMiddleware(transport, RetryPolicy{Attempts: retries, Delay: time.Second}, clock)
+	middleware := makeRetryMiddleware(transport, RetryPolicy{
+		Attempts: retries,
+		Delay:    time.Second,
+		MaxDelay: time.Minute,
+	}, clock)
 
 	resp, err := middleware.RoundTrip(req)
 	c.Assert(err, gc.IsNil)
@@ -198,11 +202,52 @@ func (s *RetrySuite) TestRetryRequiredUsingBackoff(c *gc.C) {
 		}
 	}()
 
-	middleware := makeRetryMiddleware(transport, RetryPolicy{Attempts: retries, Delay: time.Second}, clock)
+	middleware := makeRetryMiddleware(transport, RetryPolicy{
+		Attempts: retries,
+		Delay:    time.Second,
+		MaxDelay: time.Minute,
+	}, clock)
 
 	resp, err := middleware.RoundTrip(req)
 	c.Assert(err, gc.IsNil)
 	c.Assert(resp.StatusCode, gc.Equals, http.StatusOK)
+}
+
+func (s *RetrySuite) TestRetryRequiredUsingBackoffFailure(c *gc.C) {
+	ctrl := gomock.NewController(c)
+	defer ctrl.Finish()
+
+	req, err := http.NewRequest("GET", "http://meshuggah.rocks", nil)
+	c.Assert(err, gc.IsNil)
+
+	header := make(http.Header)
+	header.Add("Retry-After", "2520")
+
+	transport := NewMockRoundTripper(ctrl)
+	transport.EXPECT().RoundTrip(req).Return(&http.Response{
+		StatusCode: http.StatusTooManyRequests,
+		Header:     header,
+	}, nil)
+
+	ch := make(chan time.Time)
+
+	clock := NewMockClock(ctrl)
+	clock.EXPECT().Now().Return(time.Now()).AnyTimes()
+	clock.EXPECT().After(time.Minute * 42).Return(ch)
+
+	retries := 3
+	go func() {
+		ch <- time.Now()
+	}()
+
+	middleware := makeRetryMiddleware(transport, RetryPolicy{
+		Attempts: retries,
+		Delay:    time.Minute,
+		MaxDelay: time.Second,
+	}, clock)
+
+	_, err = middleware.RoundTrip(req)
+	c.Assert(err, gc.ErrorMatches, `API request retry is not accepting further requests until .*`)
 }
 
 func (s *RetrySuite) TestRetryRequiredAndExceeded(c *gc.C) {
@@ -230,7 +275,11 @@ func (s *RetrySuite) TestRetryRequiredAndExceeded(c *gc.C) {
 		}
 	}()
 
-	middleware := makeRetryMiddleware(transport, RetryPolicy{Attempts: retries, Delay: time.Second}, clock)
+	middleware := makeRetryMiddleware(transport, RetryPolicy{
+		Attempts: retries,
+		Delay:    time.Second,
+		MaxDelay: time.Minute,
+	}, clock)
 
 	_, err = middleware.RoundTrip(req)
 	c.Assert(err, gc.ErrorMatches, `attempt count exceeded: retryable error`)

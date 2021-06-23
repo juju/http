@@ -140,7 +140,7 @@ func (lr roundTripRecorder) RoundTrip(req *http.Request) (*http.Response, error)
 }
 
 // RetryMiddleware allows retrying of certain retryable http errors.
-// This only handles very specific status codes, ones that are deemed retryable;
+// This only handles very specific status codes, ones that are deemed retryable:
 //
 //  - 502 Bad Gateway
 //  - 503 Service Unavailable
@@ -153,6 +153,7 @@ type retryMiddleware struct {
 
 type RetryPolicy struct {
 	Delay    time.Duration
+	MaxDelay time.Duration
 	Attempts int
 }
 
@@ -160,6 +161,9 @@ type RetryPolicy struct {
 func (p RetryPolicy) Validate() error {
 	if p.Attempts < 1 {
 		return errors.Errorf("expected at least one attempt")
+	}
+	if p.MaxDelay < 1 {
+		return errors.Errorf("expected max delay to be a valid time")
 	}
 	return nil
 }
@@ -179,13 +183,20 @@ func (retryableErr) Error() string {
 	return "retryable error"
 }
 
+// RoundTrip defines a strategy for handling retries based on the status code.
 func (m retryMiddleware) RoundTrip(req *http.Request) (*http.Response, error) {
-	var res *http.Response
+	var (
+		res        *http.Response
+		backOffErr error
+	)
 	err := retry.Call(retry.CallArgs{
 		Clock: m.clock,
 		Func: func() error {
 			if err := req.Context().Err(); err != nil {
 				return err
+			}
+			if backOffErr != nil {
+				return backOffErr
 			}
 
 			var retryable bool
@@ -207,7 +218,9 @@ func (m retryMiddleware) RoundTrip(req *http.Request) (*http.Response, error) {
 		Attempts: m.policy.Attempts,
 		Delay:    m.policy.Delay,
 		BackoffFunc: func(delay time.Duration, attempts int) time.Duration {
-			return m.defaultBackoff(res, delay)
+			var duration time.Duration
+			duration, backOffErr = m.defaultBackoff(res, delay)
+			return duration
 		},
 	})
 
@@ -235,17 +248,36 @@ func (m retryMiddleware) roundTrip(req *http.Request) (*http.Response, bool, err
 }
 
 // defaultBackoff attempts to workout a good backoff strategy based on the
-// backoff policy or the status code from the response. The
-func (m retryMiddleware) defaultBackoff(resp *http.Response, max time.Duration) time.Duration {
-	if resp.StatusCode == http.StatusServiceUnavailable || resp.StatusCode == http.StatusTooManyRequests {
-		if header := resp.Header.Get("Retry-After"); header != "" {
-			// Attempt to parse the header from the request.
-			retry, err := strconv.ParseInt(header, 10, 64)
-			if err == nil {
-				return time.Second * time.Duration(retry)
-			}
+// backoff policy or the status code from the response.
+//
+// RFC7231 states that the retry-after header can look like the following:
+//
+//  - Retry-After: <http-date>
+//  - Retry-After: <delay-seconds>
+//
+func (m retryMiddleware) defaultBackoff(resp *http.Response, backoff time.Duration) (time.Duration, error) {
+	if header := resp.Header.Get("Retry-After"); header != "" {
+		// Attempt to parse the header from the request.
+		//
+		// Check for delay in seconds first, before checkking for a http-date
+		seconds, err := strconv.ParseInt(header, 10, 64)
+		if err == nil {
+			return m.clampBackoff(time.Second * time.Duration(seconds))
+		}
+		// Check for http-date.
+		date, err := time.Parse(time.RFC1123, header)
+		if err == nil {
+			return m.clampBackoff(m.clock.Now().Sub(date))
 		}
 	}
 
-	return max
+	return m.clampBackoff(backoff)
+}
+
+func (m retryMiddleware) clampBackoff(duration time.Duration) (time.Duration, error) {
+	if m.policy.MaxDelay > 0 && duration > m.policy.MaxDelay {
+		future := m.clock.Now().Add(duration)
+		return duration, errors.Errorf("API request retry is not accepting further requests until %s", future.Format(time.RFC3339))
+	}
+	return duration, nil
 }
