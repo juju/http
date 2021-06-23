@@ -149,6 +149,7 @@ type retryMiddleware struct {
 	policy              RetryPolicy
 	wrappedRoundTripper http.RoundTripper
 	clock               clock.Clock
+	logger              Logger
 }
 
 type RetryPolicy struct {
@@ -169,11 +170,12 @@ func (p RetryPolicy) Validate() error {
 }
 
 // makeRetryMiddleware creates a retry transport.
-func makeRetryMiddleware(transport http.RoundTripper, policy RetryPolicy, clock clock.Clock) http.RoundTripper {
+func makeRetryMiddleware(transport http.RoundTripper, policy RetryPolicy, clock clock.Clock, logger Logger) http.RoundTripper {
 	return retryMiddleware{
 		policy:              policy,
 		wrappedRoundTripper: transport,
 		clock:               clock,
+		logger:              logger,
 	}
 }
 
@@ -259,7 +261,7 @@ func (m retryMiddleware) defaultBackoff(resp *http.Response, backoff time.Durati
 	if header := resp.Header.Get("Retry-After"); header != "" {
 		// Attempt to parse the header from the request.
 		//
-		// Check for delay in seconds first, before checkking for a http-date
+		// Check for delay in seconds first, before checking for a http-date
 		seconds, err := strconv.ParseInt(header, 10, 64)
 		if err == nil {
 			return m.clampBackoff(time.Second * time.Duration(seconds))
@@ -269,6 +271,11 @@ func (m retryMiddleware) defaultBackoff(resp *http.Response, backoff time.Durati
 		if err == nil {
 			return m.clampBackoff(m.clock.Now().Sub(date))
 		}
+		url := ""
+		if resp.Request != nil {
+			url = resp.Request.URL.String()
+		}
+		m.logger.Errorf("unable to parse Retry-After header %s from %s", header, url)
 	}
 
 	return m.clampBackoff(backoff)

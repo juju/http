@@ -44,6 +44,7 @@ type HTTPClient interface {
 type Logger interface {
 	IsTraceEnabled() bool
 	Tracef(message string, args ...interface{})
+	Errorf(message string, args ...interface{})
 }
 
 // Option to be passed into the transport construction to customize the
@@ -218,7 +219,12 @@ func NewClient(options ...Option) *Client {
 	// Ensure we add the retry middleware after request recorder if there is
 	// one, to ensure that we get all the logging at the right level.
 	if opts.retryPolicy != nil {
-		client.Transport = makeRetryMiddleware(client.Transport, *opts.retryPolicy, clock.WallClock)
+		client.Transport = makeRetryMiddleware(
+			client.Transport,
+			*opts.retryPolicy,
+			clock.WallClock,
+			opts.logger,
+		)
 	}
 
 	if opts.cookieJar != nil {

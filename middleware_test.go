@@ -124,7 +124,11 @@ func (s *RetrySuite) TestRetryNotRequired(c *gc.C) {
 		StatusCode: http.StatusOK,
 	}, nil)
 
-	middleware := makeRetryMiddleware(transport, RetryPolicy{Attempts: 3, Delay: time.Second}, clock.WallClock)
+	middleware := makeRetryMiddleware(transport, RetryPolicy{
+		Attempts: 3,
+		Delay:    time.Second,
+		MaxDelay: time.Minute,
+	}, clock.WallClock, logger(ctrl))
 
 	resp, err := middleware.RoundTrip(req)
 	c.Assert(err, gc.IsNil)
@@ -163,7 +167,7 @@ func (s *RetrySuite) TestRetryRequired(c *gc.C) {
 		Attempts: retries,
 		Delay:    time.Second,
 		MaxDelay: time.Minute,
-	}, clock)
+	}, clock, logger(ctrl))
 
 	resp, err := middleware.RoundTrip(req)
 	c.Assert(err, gc.IsNil)
@@ -206,7 +210,7 @@ func (s *RetrySuite) TestRetryRequiredUsingBackoff(c *gc.C) {
 		Attempts: retries,
 		Delay:    time.Second,
 		MaxDelay: time.Minute,
-	}, clock)
+	}, clock, logger(ctrl))
 
 	resp, err := middleware.RoundTrip(req)
 	c.Assert(err, gc.IsNil)
@@ -244,7 +248,44 @@ func (s *RetrySuite) TestRetryRequiredUsingBackoffFailure(c *gc.C) {
 		Attempts: retries,
 		Delay:    time.Minute,
 		MaxDelay: time.Second,
-	}, clock)
+	}, clock, logger(ctrl))
+
+	_, err = middleware.RoundTrip(req)
+	c.Assert(err, gc.ErrorMatches, `API request retry is not accepting further requests until .*`)
+}
+
+func (s *RetrySuite) TestRetryRequiredUsingBackoffError(c *gc.C) {
+	ctrl := gomock.NewController(c)
+	defer ctrl.Finish()
+
+	req, err := http.NewRequest("GET", "http://meshuggah.rocks", nil)
+	c.Assert(err, gc.IsNil)
+
+	header := make(http.Header)
+	header.Add("Retry-After", "!@1234391asd--\\123")
+
+	transport := NewMockRoundTripper(ctrl)
+	transport.EXPECT().RoundTrip(req).Return(&http.Response{
+		StatusCode: http.StatusTooManyRequests,
+		Header:     header,
+	}, nil)
+
+	ch := make(chan time.Time)
+
+	clock := NewMockClock(ctrl)
+	clock.EXPECT().Now().Return(time.Now()).AnyTimes()
+	clock.EXPECT().After(time.Minute * 1).Return(ch)
+
+	retries := 3
+	go func() {
+		ch <- time.Now()
+	}()
+
+	middleware := makeRetryMiddleware(transport, RetryPolicy{
+		Attempts: retries,
+		Delay:    time.Minute,
+		MaxDelay: time.Second,
+	}, clock, logger(ctrl))
 
 	_, err = middleware.RoundTrip(req)
 	c.Assert(err, gc.ErrorMatches, `API request retry is not accepting further requests until .*`)
@@ -279,7 +320,7 @@ func (s *RetrySuite) TestRetryRequiredAndExceeded(c *gc.C) {
 		Attempts: retries,
 		Delay:    time.Second,
 		MaxDelay: time.Minute,
-	}, clock)
+	}, clock, logger(ctrl))
 
 	_, err = middleware.RoundTrip(req)
 	c.Assert(err, gc.ErrorMatches, `attempt count exceeded: retryable error`)
@@ -299,11 +340,22 @@ func (s *RetrySuite) TestRetryRequiredContextKilled(c *gc.C) {
 	clock := NewMockClock(ctrl)
 	clock.EXPECT().Now().Return(time.Now())
 
-	middleware := makeRetryMiddleware(transport, RetryPolicy{Attempts: 3, Delay: time.Second}, clock)
+	middleware := makeRetryMiddleware(transport, RetryPolicy{
+		Attempts: 3,
+		Delay:    time.Second,
+	}, clock, logger(ctrl))
 
 	// Nothing should run, the context has been cancelled.
 	cancel()
 
 	_, err = middleware.RoundTrip(req)
 	c.Assert(err, gc.ErrorMatches, `context canceled`)
+}
+
+func logger(ctrl *gomock.Controller) Logger {
+	logger := NewMockLogger(ctrl)
+	logger.EXPECT().IsTraceEnabled().Return(false).AnyTimes()
+	logger.EXPECT().Tracef(gomock.Any(), gomock.Any()).AnyTimes()
+	logger.EXPECT().Errorf(gomock.Any(), gomock.Any()).AnyTimes()
+	return logger
 }
