@@ -8,9 +8,10 @@ import (
 	"net/http"
 	"strings"
 
-	jujuhttp "github.com/juju/http"
 	"github.com/juju/testing"
 	gc "gopkg.in/check.v1"
+
+	jujuhttp "github.com/juju/http/v2"
 )
 
 type httpSuite struct {

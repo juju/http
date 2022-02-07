@@ -1,4 +1,4 @@
-PROJECT := github.com/juju/http
+PROJECT := github.com/juju/http/v2
 
 .PHONY: check-go check
 
@@ -12,10 +12,6 @@ check-go:
 		exit 1; \
 	fi )
 	@(go vet -all -composites=false -copylocks=false $(PROJECT)/...)
-
-vendor-dependencies:
-## vendor-dependencies: updates vendored dependencies
-	@go mod vendor
 
 # Reformat source files.
 format:
