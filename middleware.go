@@ -12,7 +12,9 @@ import (
 
 	"github.com/juju/clock"
 	"github.com/juju/errors"
+	"github.com/juju/loggo"
 	"github.com/juju/retry"
+	"golang.org/x/net/http/httpproxy"
 )
 
 // FileProtocolMiddleware registers support for file:// URLs on the given transport.
@@ -90,8 +92,21 @@ func (b *LocalDialBreaker) Trip() {
 // ProxyMiddleware adds a Proxy to the given transport. This implementation
 // uses the http.ProxyFromEnvironment.
 func ProxyMiddleware(transport *http.Transport) *http.Transport {
-	transport.Proxy = http.ProxyFromEnvironment
+	transport.Proxy = getProxy
 	return transport
+}
+
+var midLogger = loggo.GetLoggerWithLabels("juju.http.middleware", "http")
+
+func getProxy(req *http.Request) (*url.URL, error) {
+	// Get proxy config new for each client.  Go will cache the proxy
+	// settings for a process, this is a problem for long running programs.
+	// And caused changes in proxy settings via model-config not to
+	// be used.
+	cfg := httpproxy.FromEnvironment()
+	midLogger.Tracef("proxy config http(%s), https(%s), no-proxy(%s)",
+		cfg.HTTPProxy, cfg.HTTPSProxy, cfg.NoProxy)
+	return cfg.ProxyFunc()(req.URL)
 }
 
 // ForceAttemptHTTP2Middleware forces a HTTP/2 connection if a non-zero
