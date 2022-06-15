@@ -237,3 +237,17 @@ func (s *httpTLSServerSuite) testGetHTTPClientWithCerts(c *gc.C, skip bool) {
 	c.Assert(resp.Body.Close(), gc.IsNil)
 	c.Assert(resp.StatusCode, gc.Equals, http.StatusOK)
 }
+
+func (s *clientSuite) TestDisableKeepAlives(c *gc.C) {
+	client := NewClient()
+	transport := client.Client().Transport.(*http.Transport)
+	c.Assert(transport.DisableKeepAlives, gc.Equals, false)
+
+	client = NewClient(WithDisableKeepAlives(false))
+	transport = client.Client().Transport.(*http.Transport)
+	c.Assert(transport.DisableKeepAlives, gc.Equals, false)
+
+	client = NewClient(WithDisableKeepAlives(true))
+	transport = client.Client().Transport.(*http.Transport)
+	c.Assert(transport.DisableKeepAlives, gc.Equals, true)
+}
