@@ -88,7 +88,8 @@ func WithCookieJar(value http.CookieJar) Option {
 
 // WithDisableKeepAlives will disable HTTP keep alives, not TCP keep alives.
 // Disabling HTTP keep alives will only use the connection to the server for a
-// single HTTP request creating a lot of garbage for the collector.
+// single HTTP request, slowing down subsequent requests and creating a lot of
+// garbage for the collector.
 func WithDisableKeepAlives(value bool) Option {
 	return func(opt *options) {
 		opt.disableKeepAlives = value
@@ -166,7 +167,6 @@ func newOptions() *options {
 	defaultCopy := *http.DefaultClient
 
 	return &options{
-		disableKeepAlives:        true,
 		tlsHandshakeTimeout:      20 * time.Second,
 		skipHostnameVerification: false,
 		middlewares: []TransportMiddleware{

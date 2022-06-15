@@ -133,3 +133,16 @@ nd0dgM/TfgtnuhbVS4ISkT4vZoSn84hOE7BG5rSPE+/q24Wv5gG0PI1sky8tmXzX
 juAEWSJVCSE0TK/mvBVdlyKOJoEgtfMcRfDQfA1rI9My0rU+/Y5A0w==
 -----END RSA PRIVATE KEY-----`
 )
+
+func (TLSSuite) TestDisableKeepAlives(c *gc.C) {
+	transport := DefaultHTTPTransport()
+	c.Assert(transport.DisableKeepAlives, gc.Equals, false)
+
+	transport = NewHTTPTLSTransport(TransportConfig{})
+	c.Assert(transport.DisableKeepAlives, gc.Equals, false)
+
+	transport = NewHTTPTLSTransport(TransportConfig{
+		DisableKeepAlives: true,
+	})
+	c.Assert(transport.DisableKeepAlives, gc.Equals, true)
+}

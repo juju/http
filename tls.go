@@ -24,9 +24,6 @@ type TransportConfig struct {
 // NewHTTPTLSTransport returns a new http.Transport constructed with the TLS config
 // and the necessary parameters for Juju.
 func NewHTTPTLSTransport(config TransportConfig) *http.Transport {
-	// See https://code.google.com/p/go/issues/detail?id=4677
-	// We need to force the connection to close each time so that we don't
-	// hit the above Go bug.
 	transport := &http.Transport{
 		TLSClientConfig:     config.TLSConfig,
 		DisableKeepAlives:   config.DisableKeepAlives,
@@ -38,11 +35,10 @@ func NewHTTPTLSTransport(config TransportConfig) *http.Transport {
 	return transport
 }
 
-// DefaultHTTPTransport creates a default transport with HTTP keep alives
-// disabled and proxy middleware enable.
+// DefaultHTTPTransport creates a default transport with proxy middleware
+// enabled.
 func DefaultHTTPTransport() *http.Transport {
 	return NewHTTPTLSTransport(TransportConfig{
-		DisableKeepAlives:   true,
 		TLSHandshakeTimeout: 20 * time.Second,
 		Middlewares: []TransportMiddleware{
 			ProxyMiddleware,
