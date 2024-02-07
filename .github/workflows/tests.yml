@@ -12,7 +12,7 @@ jobs:
 
     strategy:
       matrix:
-        go: ['1.18', '1.17']
+        go: ['1.21', '1.18']
 
     name: Go ${{ matrix.go }}
 
@@ -39,7 +39,7 @@ jobs:
     - name: Set up Go
       uses: actions/setup-go@v2
       with:
-        go-version: '1.18'
+        go-version: '1.21'
 
     - name: Ensure no formatting changes
       run: |

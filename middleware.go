@@ -12,7 +12,7 @@ import (
 
 	"github.com/juju/clock"
 	"github.com/juju/errors"
-	"github.com/juju/loggo"
+	"github.com/juju/loggo/v2"
 	"github.com/juju/retry"
 	"golang.org/x/net/http/httpproxy"
 )
@@ -96,7 +96,7 @@ func ProxyMiddleware(transport *http.Transport) *http.Transport {
 	return transport
 }
 
-var midLogger = loggo.GetLoggerWithLabels("juju.http.middleware", "http")
+var midLogger = loggo.GetLoggerWithTags("juju.http.middleware", "http")
 
 func getProxy(req *http.Request) (*url.URL, error) {
 	// Get proxy config new for each client.  Go will cache the proxy
@@ -157,9 +157,9 @@ func (lr roundTripRecorder) RoundTrip(req *http.Request) (*http.Response, error)
 // RetryMiddleware allows retrying of certain retryable http errors.
 // This only handles very specific status codes, ones that are deemed retryable:
 //
-//  - 502 Bad Gateway
-//  - 503 Service Unavailable
-//  - 504 Gateway Timeout
+//   - 502 Bad Gateway
+//   - 503 Service Unavailable
+//   - 504 Gateway Timeout
 type retryMiddleware struct {
 	policy              RetryPolicy
 	wrappedRoundTripper http.RoundTripper
@@ -269,9 +269,8 @@ func (m retryMiddleware) roundTrip(req *http.Request) (*http.Response, bool, err
 //
 // RFC7231 states that the retry-after header can look like the following:
 //
-//  - Retry-After: <http-date>
-//  - Retry-After: <delay-seconds>
-//
+//   - Retry-After: <http-date>
+//   - Retry-After: <delay-seconds>
 func (m retryMiddleware) defaultBackoff(resp *http.Response, backoff time.Duration) (time.Duration, error) {
 	if header := resp.Header.Get("Retry-After"); header != "" {
 		// Attempt to parse the header from the request.
