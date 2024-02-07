@@ -7,9 +7,9 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/golang/mock/gomock"
 	"github.com/juju/clock"
 	"github.com/juju/testing"
+	"go.uber.org/mock/gomock"
 	gc "gopkg.in/check.v1"
 )
 

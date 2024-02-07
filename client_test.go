@@ -11,12 +11,12 @@ import (
 	"net/http"
 	"net/http/cookiejar"
 	"net/http/httptest"
-	url "net/url"
+	"net/url"
 	"time"
 
-	gomock "github.com/golang/mock/gomock"
 	"github.com/juju/testing"
 	jc "github.com/juju/testing/checkers"
+	"go.uber.org/mock/gomock"
 	gc "gopkg.in/check.v1"
 )
 
